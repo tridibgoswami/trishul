@@ -1,0 +1,620 @@
+//@version=4
+study(title="SVMKR_UT_HMA_ORB - Chop + Session Mgmt v4", shorttitle="SVMKR_UT_HMA_SM_v4", overlay=true)
+
+// =====================================================================
+// ENHANCEMENTS OVER v3:
+//   1. EOD force-flat exit (configurable time, default 15:15 IST)
+//   2. Day continuation re-entry (re-enter next day if trend holds)
+//   3. Adverse gap filter (skip re-entry if market gaps against direction)
+//   4. Late entry block (no new positions after configurable cutoff)
+//   5. ORB relocated to 09:15 IST (configurable 5 / 10 / 15 min duration)
+//   6. ORB break used as gate for both intraday and continuation signals
+//   7. Backtest engine updated to handle EOD exits and continuation entries
+//   8. Extended status tables for session state
+// =====================================================================
+
+// =====================================================================
+// UT BOT SETTINGS
+// =====================================================================
+grpUT = "UT Bot Settings"
+a = input(5.0,  title="UT Key Value / Sensitivity", group=grpUT)
+c = input(9,    title="UT ATR Period",               group=grpUT)
+h = input(false, title="Signals from Heikin Ashi Candles", group=grpUT)
+
+// =====================================================================
+// HMA SETTINGS
+// =====================================================================
+grpHMA = "Hull MA Settings"
+n = input(10, title="Hull MA Period", group=grpHMA)
+
+// =====================================================================
+// CHOP FILTER SETTINGS
+// =====================================================================
+grpChop = "Chop Filter - No ADX"
+enableChopFilter     = input(true,     title="Enable Chop Filter",                    group=grpChop)
+chopMode             = input("Medium", title="Chop Filter Mode",                      options=["Off","Light","Medium","Strict"], group=grpChop)
+useHmaTrendFilter    = input(true,     title="Use HMA Trend Direction Filter",        group=grpChop)
+useHmaSlopeFilter    = input(true,     title="Use HMA Slope Filter",                  group=grpChop)
+useDistanceFilter    = input(true,     title="Use ATR Distance From HMA Filter",      group=grpChop)
+useCooldownFilter    = input(true,     title="Use Signal Cooldown Filter",            group=grpChop)
+useRangeFilter       = input(false,    title="Use Strict Range Breakout Filter",      group=grpChop)
+slopeLen             = input(3,        title="HMA Slope Lookback Bars",   minval=1,   group=grpChop)
+atrNormLen           = input(14,       title="ATR Normalization Period",   minval=1,   group=grpChop)
+manualSlopeThreshold = input(0.045,    title="Manual ATR-Normalized Slope Threshold", minval=0.001, step=0.001, group=grpChop)
+useAutoThreshold     = input(true,     title="Use Auto Threshold by Mode",            group=grpChop)
+manualDistanceMult   = input(0.10,     title="Manual Distance From HMA ATR Mult",    minval=0.01, step=0.01, group=grpChop)
+useAutoDistance      = input(true,     title="Use Auto Distance by Mode",             group=grpChop)
+cooldownBarsManual   = input(3,        title="Cooldown Bars After Signal",  minval=0, group=grpChop)
+rangeLookback        = input(9,        title="Strict Range Lookback Bars",  minval=2, group=grpChop)
+showChopBg           = input(true,     title="Show Chop Background",                 group=grpChop)
+showFilterTable      = input(true,     title="Show Filter Status Table",              group=grpChop)
+showBlockedSignals   = input(false,    title="Show Blocked Raw Signals",              group=grpChop)
+
+// =====================================================================
+// ORB SETTINGS  (moved to 09:15 IST, configurable duration)
+// =====================================================================
+grpORB = "Open Range Breakout (09:15 IST)"
+orbDurInput  = input("10 min", title="ORB Duration from 09:15 IST", options=["5 min","10 min","15 min"], group=grpORB)
+showORBLines = input(true,     title="Show ORB High / Low Lines",                   group=grpORB)
+useORBGate   = input(true,     title="Use ORB Break as Signal Gate (intraday+cont)",group=grpORB)
+
+// =====================================================================
+// SESSION MANAGEMENT SETTINGS
+// =====================================================================
+grpSess = "Session Management  (NSE Intraday)"
+enableEODExit   = input(true,  title="Enable EOD Force-Flat Exit",               group=grpSess)
+eodHour         = input(15,    title="EOD Exit Hour   (24h IST)",                group=grpSess)
+eodMin          = input(15,    title="EOD Exit Minute (IST)",                    group=grpSess)
+enableDayCont   = input(true,  title="Enable Day Continuation Re-entry",         group=grpSess)
+enableGapFilt   = input(true,  title="Enable Adverse Gap Filter",                group=grpSess)
+gapFilterPct    = input(0.5,   title="Max Adverse Gap % for Re-entry Block",     minval=0.1, step=0.1, group=grpSess)
+contWindowMins  = input(30,    title="Continuation Signal Window (mins after ORB)", minval=5, step=5, group=grpSess)
+enableLateBlock = input(true,  title="Block New Entries After Cutoff Time",      group=grpSess)
+lateHour        = input(14,    title="No New Entry After Hour   (24h IST)",      group=grpSess)
+lateMin         = input(30,    title="No New Entry After Minute (IST)",          group=grpSess)
+showContSignals = input(true,  title="Show Day Continuation Signal Labels",       group=grpSess)
+showEODLabel    = input(true,  title="Show EOD Exit Label",                      group=grpSess)
+showSessTable   = input(true,  title="Show Session Status Table",                group=grpSess)
+
+// =====================================================================
+// BACKTEST WINDOW SETTINGS
+// =====================================================================
+grpBT = "Backtest Window"
+useDateFilter = input(false, title="Use Backtest Start / End Filter", group=grpBT)
+btStart       = input(defval=timestamp(2026, 04, 17, 09, 15), title="Backtest Start Date & Time (IST)", type=input.time, group=grpBT)
+btEnd         = input(defval=timestamp(2026, 04, 17, 15, 30), title="Backtest End Date & Time (IST)",   type=input.time, group=grpBT)
+showBTTable   = input(true,  title="Show Backtest Summary Table",     group=grpBT)
+showBTLabels  = input(false, title="Show Backtest Entry/Exit Labels", group=grpBT)
+
+// =====================================================================
+// HELPER FUNCTIONS
+// =====================================================================
+f_modeSlopeThreshold(_mode, _manual, _auto) =>
+    _auto ? (_mode == "Light" ? 0.030 : _mode == "Medium" ? 0.045 : _mode == "Strict" ? 0.060 : 0.0) : _manual
+
+f_modeDistanceMult(_mode, _manual, _auto) =>
+    _auto ? (_mode == "Light" ? 0.06 : _mode == "Medium" ? 0.10 : _mode == "Strict" ? 0.14 : 0.0) : _manual
+
+f_modeCooldown(_mode, _manual) =>
+    _mode == "Light" ? max(_manual, 2) : _mode == "Medium" ? max(_manual, 3) : _mode == "Strict" ? max(_manual, 5) : _manual
+
+f_round2(_x) =>
+    round(_x * 100.0) / 100.0
+
+f_priceText(_x) =>
+    tostring(f_round2(_x))
+
+f_calcTradePoints(_fromPos, _entryPx, _exitPx) =>
+    _fromPos == 1 ? (_exitPx - _entryPx) : (_entryPx - _exitPx)
+
+// =====================================================================
+// UT BOT LOGIC
+// =====================================================================
+xATR  = atr(c)
+nLoss = a * xATR
+
+src = h ? security(heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=false) : close
+
+xATRTrailingStop = 0.0
+xATRTrailingStop := iff(src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0),
+     max(nz(xATRTrailingStop[1]), src - nLoss),
+   iff(src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0),
+     min(nz(xATRTrailingStop[1]), src + nLoss),
+   iff(src > nz(xATRTrailingStop[1], 0), src - nLoss, src + nLoss)))
+
+pos = 0
+pos := iff(src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0),  1,
+       iff(src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0), -1, nz(pos[1], 0)))
+
+xcolor = pos == -1 ? color.red : pos == 1 ? color.green : color.blue
+
+ema1  = ema(src, 1)
+above = crossover(ema1, xATRTrailingStop)
+below = crossover(xATRTrailingStop, ema1)
+
+rawBuy  = src > xATRTrailingStop and above
+rawSell = src < xATRTrailingStop and below
+barbuy  = src > xATRTrailingStop
+barsell = src < xATRTrailingStop
+
+// =====================================================================
+// HULL MA LOGIC
+// =====================================================================
+n2ma  = 2 * wma(close,    round(n / 2))
+nma   = wma(close,    n)
+diff  = n2ma - nma
+sqn   = round(sqrt(n))
+
+n2ma1 = 2 * wma(close[1], round(n / 2))
+nma1  = wma(close[1], n)
+diff1 = n2ma1 - nma1
+
+hma     = wma(diff,  sqn)
+hmaPrev = wma(diff1, sqn)
+
+// =====================================================================
+// CHOP FILTER LOGIC
+// =====================================================================
+atrNorm = atr(atrNormLen)
+
+slopeThreshold = f_modeSlopeThreshold(chopMode, manualSlopeThreshold, useAutoThreshold)
+distanceMult   = f_modeDistanceMult(chopMode, manualDistanceMult, useAutoDistance)
+cooldownBars   = f_modeCooldown(chopMode, cooldownBarsManual)
+
+hmaSlope     = hma - hma[slopeLen]
+hmaSlopeNorm = abs(hmaSlope) / max(atrNorm, syminfo.mintick)
+hmaSlopeBull = hmaSlope > 0 and hmaSlopeNorm >= slopeThreshold
+hmaSlopeBear = hmaSlope < 0 and hmaSlopeNorm >= slopeThreshold
+hmaTrendBull = hma > hmaPrev
+hmaTrendBear = hma < hmaPrev
+
+distFromHma = abs(close - hma)
+distOk      = distFromHma >= atrNorm * distanceMult
+
+rangeHighPrev = highest(high, rangeLookback)[1]
+rangeLowPrev  = lowest(low,  rangeLookback)[1]
+rangeBuyOk    = close > rangeHighPrev
+rangeSellOk   = close < rangeLowPrev
+
+var int lastSignalBar = na
+cooldownOk = na(lastSignalBar) or (bar_index - lastSignalBar > cooldownBars)
+
+filtersEnabled = enableChopFilter and chopMode != "Off"
+
+buyHmaTrendOk  = not filtersEnabled or not useHmaTrendFilter or hmaTrendBull
+sellHmaTrendOk = not filtersEnabled or not useHmaTrendFilter or hmaTrendBear
+buySlopeOk     = not filtersEnabled or not useHmaSlopeFilter or hmaSlopeBull
+sellSlopeOk    = not filtersEnabled or not useHmaSlopeFilter or hmaSlopeBear
+buyDistanceOk  = not filtersEnabled or not useDistanceFilter or distOk
+sellDistanceOk = not filtersEnabled or not useDistanceFilter or distOk
+buyCooldownOk  = not filtersEnabled or not useCooldownFilter or cooldownOk
+sellCooldownOk = not filtersEnabled or not useCooldownFilter or cooldownOk
+buyRangeOk     = not filtersEnabled or not useRangeFilter or rangeBuyOk
+sellRangeOk    = not filtersEnabled or not useRangeFilter or rangeSellOk
+
+// Raw filtered signals (chop filter applied, session layer applied later)
+buy  = rawBuy  and buyHmaTrendOk  and buySlopeOk  and buyDistanceOk  and buyCooldownOk  and buyRangeOk
+sell = rawSell and sellHmaTrendOk and sellSlopeOk and sellDistanceOk and sellCooldownOk and sellRangeOk
+
+if buy or sell
+    lastSignalBar := bar_index
+
+blockedBuy  = rawBuy  and not buy
+blockedSell = rawSell and not sell
+
+isFlatSlope  = filtersEnabled and useHmaSlopeFilter and hmaSlopeNorm < slopeThreshold
+isNearHma    = filtersEnabled and useDistanceFilter  and not distOk
+isInCooldown = filtersEnabled and useCooldownFilter  and not cooldownOk
+isChop       = isFlatSlope or isNearHma or isInCooldown
+
+var int stableBias = 0
+if hmaSlopeBull and hmaTrendBull
+    stableBias := 1
+else if hmaSlopeBear and hmaTrendBear
+    stableBias := -1
+else
+    stableBias := nz(stableBias[1], 0)
+
+hmaColor = stableBias == 1 ? color.green : stableBias == -1 ? color.red : color.blue
+
+// =====================================================================
+// SESSION & TIME UTILITIES
+// =====================================================================
+// All time values in IST (chart must be set to IST / Asia/Kolkata)
+orbMins          = orbDurInput == "5 min" ? 5 : orbDurInput == "10 min" ? 10 : 15
+orbEndMinute     = 15 + orbMins                    // 20 / 25 / 30
+
+barTimeMin       = hour * 60 + minute
+eodTimeMin       = eodHour * 60 + eodMin           // default 915  (15:15)
+lateTimeMin      = lateHour * 60 + lateMin         // default 870  (14:30)
+orbStartTimeMin  = 9 * 60 + 15                     // 555  (09:15)
+orbEndTimeMin    = 9 * 60 + orbEndMinute           // 560 / 565 / 570
+contWindowEndMin = orbEndTimeMin + contWindowMins  // e.g. 595 (09:55) for 10-min ORB + 30-min window
+
+isNewDay     = change(time("D")) != 0
+inORBPeriod  = (hour == 9) and (minute >= 15) and (minute < orbEndMinute)
+inContWindow = (barTimeMin >= orbEndTimeMin) and (barTimeMin < contWindowEndMin)
+isEODTime    = barTimeMin >= eodTimeMin
+isEODBar     = isEODTime and not isEODTime[1]
+isLateBlock  = enableLateBlock and barTimeMin >= lateTimeMin
+
+// =====================================================================
+// ORB TRACKING  (09:15 IST, duration = orbDurInput)
+// =====================================================================
+var float orbHigh = na
+var float orbLow  = na
+
+if isNewDay
+    // First bar of the trading day (09:15) — also the first ORB bar
+    orbHigh := high
+    orbLow  := low
+else if inORBPeriod
+    orbHigh := max(orbHigh, high)
+    orbLow  := min(orbLow,  low)
+// After ORB period orbHigh / orbLow are frozen for the rest of the day
+
+orbFormed = not na(orbHigh) and barTimeMin >= orbEndTimeMin
+
+// ORB as intraday entry gate
+orbBuyGateOk  = not useORBGate or not orbFormed or close > orbHigh
+orbSellGateOk = not useORBGate or not orbFormed or close < orbLow
+
+// =====================================================================
+// SESSION MANAGEMENT VARIABLES
+// =====================================================================
+var int   livePos         = 0     // current virtual position: 1=long, -1=short, 0=flat
+var int   prevDaySignal   = 0     // direction held at previous EOD exit
+var float prevDayClose    = na    // close price at EOD exit for gap calculation
+var bool  contDoneToday   = false // true once a continuation re-entry fires this day
+var bool  adverseGapToday = false // true if today's open has an adverse gap vs prevDaySignal
+var float todayGapPct     = 0.0   // today's open gap % from prevDayClose
+
+// =====================================================================
+// DAY-START: reset daily state and compute gap
+// =====================================================================
+if isNewDay
+    contDoneToday := false
+    if not na(prevDayClose) and enableGapFilt
+        todayGapPct     := (open - prevDayClose) / prevDayClose * 100.0
+        // Adverse gap: market opens AGAINST the direction we were holding
+        adverseGapToday := (prevDaySignal == 1 and todayGapPct < -gapFilterPct) or
+                           (prevDaySignal == -1 and todayGapPct > gapFilterPct)
+    else
+        todayGapPct     := 0.0
+        adverseGapToday := false
+
+// =====================================================================
+// EOD EXIT: force flat, snapshot state for tomorrow
+// =====================================================================
+eodExitFired = false
+if isEODBar and enableEODExit
+    prevDaySignal := livePos      // what we were holding
+    prevDayClose  := close        // today's EOD price
+    livePos       := 0            // go flat overnight
+    eodExitFired  := true
+
+// =====================================================================
+// APPLY SESSION GATES TO INTRADAY SIGNALS
+// Late block:     no new positions after cutoff (existing position can run)
+// EOD time:       suppress all new entries on and after the EOD bar
+// ORB gate:       (when enabled) only enter in direction of ORB break
+// =====================================================================
+sessionBlockNew = isLateBlock or isEODTime
+
+buyFinal  = buy  and not sessionBlockNew and orbBuyGateOk
+sellFinal = sell and not sessionBlockNew and orbSellGateOk
+
+// =====================================================================
+// DAY CONTINUATION RE-ENTRY
+// Fires inside the post-ORB window when the prior day's trend is intact
+// =====================================================================
+contLong = enableDayCont and
+           not contDoneToday and
+           inContWindow and
+           orbFormed and
+           prevDaySignal == 1 and           // was long at yesterday's EOD
+           not adverseGapToday and          // no adverse overnight gap
+           pos == 1 and                     // UT Bot still bullish today
+           hmaTrendBull and                 // HMA still rising
+           (not useORBGate or close > orbHigh)  // ORB break confirms direction
+
+contShort = enableDayCont and
+            not contDoneToday and
+            inContWindow and
+            orbFormed and
+            prevDaySignal == -1 and         // was short at yesterday's EOD
+            not adverseGapToday and
+            pos == -1 and                   // UT Bot still bearish today
+            hmaTrendBear and                // HMA still falling
+            (not useORBGate or close < orbLow)
+
+if contLong or contShort
+    contDoneToday := true
+
+// =====================================================================
+// UPDATE LIVE POSITION TRACKER
+// =====================================================================
+// EOD exit was already handled above (livePos set to 0).
+// Update for new signals in order: buyFinal > sellFinal > cont entries.
+if buyFinal or contLong
+    livePos := 1
+if sellFinal or contShort
+    livePos := -1
+
+// =====================================================================
+// PLOTS — HMA, UT TRAILING STOP
+// =====================================================================
+plot(hma,               color=hmaColor, linewidth=2, title="HullMA Stable Bias")
+plot(xATRTrailingStop,  color=xcolor,   linewidth=1, title="UT ATR Trailing Stop")
+
+// =====================================================================
+// PLOTS — ORB LEVELS
+// =====================================================================
+// Draw levels only after ORB is formed and keep them for the rest of the day
+plot(showORBLines and orbFormed ? orbHigh : na, style=plot.style_line, color=color.new(color.lime,  20), linewidth=1, title="ORB High")
+plot(showORBLines and orbFormed ? orbLow  : na, style=plot.style_line, color=color.new(color.red,   20), linewidth=1, title="ORB Low")
+
+// =====================================================================
+// SHAPES — INTRADAY BUY / SELL
+// =====================================================================
+plotshape(buyFinal,  title="Buy",  text="Buy",  style=shape.labelup,   location=location.belowbar, color=color.green, textcolor=color.white, size=size.tiny)
+plotshape(sellFinal, title="Sell", text="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,   textcolor=color.white, size=size.tiny)
+
+// =====================================================================
+// SHAPES — DAY CONTINUATION SIGNALS
+// =====================================================================
+plotshape(showContSignals and contLong,  title="Cont Long",  text="▶CONT L", style=shape.labelup,   location=location.belowbar, color=color.new(color.teal,   0), textcolor=color.white, size=size.small)
+plotshape(showContSignals and contShort, title="Cont Short", text="▶CONT S", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 0), textcolor=color.white, size=size.small)
+
+// =====================================================================
+// SHAPES — EOD EXIT MARKER
+// =====================================================================
+plotshape(showEODLabel and eodExitFired, title="EOD Exit", text="EOD FLAT", style=shape.xcross, location=location.abovebar, color=color.new(color.yellow, 0), textcolor=color.black, size=size.small)
+
+// =====================================================================
+// SHAPES — BLOCKED SIGNALS (chop filter)
+// =====================================================================
+plotshape(showBlockedSignals and blockedBuy,  title="Blocked Buy",  text="B-Buy",  style=shape.triangleup,   location=location.belowbar, color=color.gray, textcolor=color.white, size=size.tiny)
+plotshape(showBlockedSignals and blockedSell, title="Blocked Sell", text="B-Sell", style=shape.triangledown, location=location.abovebar, color=color.gray, textcolor=color.white, size=size.tiny)
+
+// =====================================================================
+// BACKGROUNDS
+// =====================================================================
+bgcolor(showChopBg and isChop ?    color.new(color.gray,   90) : na, title="Chop Background")
+bgcolor(isLateBlock and not isEODTime ? color.new(color.orange, 95) : na, title="Late Block Zone")
+
+// =====================================================================
+// ALERT CONDITIONS
+// =====================================================================
+alertcondition(buyFinal,   "UT Long (Session OK)",     "UT Long — Session Filtered")
+alertcondition(sellFinal,  "UT Short (Session OK)",    "UT Short — Session Filtered")
+alertcondition(contLong,   "Day Cont LONG",            "Day Continuation LONG re-entry")
+alertcondition(contShort,  "Day Cont SHORT",           "Day Continuation SHORT re-entry")
+alertcondition(eodExitFired, "EOD Force Exit",         "EOD Force-Flat Exit fired")
+alertcondition(blockedBuy,  "Blocked UT Long",         "Blocked UT Long — Chop Filter")
+alertcondition(blockedSell, "Blocked UT Short",        "Blocked UT Short — Chop Filter")
+
+// =====================================================================
+// BACKTEST ENGINE
+// Updated to handle: EOD exits, continuation entries, late block,
+// and the backtest date-window forced exit.
+// =====================================================================
+inBTWindow     = not useDateFilter or (time >= btStart and time <= btEnd)
+btWindowEnded  = useDateFilter and time > btEnd and time[1] <= btEnd
+
+var int   btPos          = 0
+var float btEntryPrice   = na
+var int   btEntryBar     = na
+var int   btSignals      = 0
+var int   btTrades       = 0
+var int   btWins         = 0
+var int   btLosses       = 0
+var int   btFlat         = 0
+var float btGrossProfit  = 0.0
+var float btGrossLoss    = 0.0
+var float btNetPoints    = 0.0
+var float btBestTrade    = na
+var float btWorstTrade   = na
+var float btEquityPeak   = 0.0
+var float btMaxDD        = 0.0
+var int   btEODExits     = 0
+var int   btContEntries  = 0
+
+f_recordTrade(_pts) =>
+    btTrades     := btTrades + 1
+    btNetPoints  := btNetPoints + _pts
+    btBestTrade  := na(btBestTrade)  ? _pts : max(btBestTrade,  _pts)
+    btWorstTrade := na(btWorstTrade) ? _pts : min(btWorstTrade, _pts)
+    if _pts > 0
+        btWins        := btWins + 1
+        btGrossProfit := btGrossProfit + _pts
+    else if _pts < 0
+        btLosses      := btLosses + 1
+        btGrossLoss   := btGrossLoss + abs(_pts)
+    else
+        btFlat        := btFlat + 1
+    btEquityPeak := max(btEquityPeak, btNetPoints)
+    btMaxDD      := max(btMaxDD, btEquityPeak - btNetPoints)
+
+// Combined effective buy / sell for backtest (intraday + continuation)
+btBuy  = buyFinal or contLong
+btSell = sellFinal or contShort
+
+if inBTWindow
+    // Count signals
+    if btBuy or btSell
+        btSignals := btSignals + 1
+
+    // Count continuation entries
+    if contLong or contShort
+        btContEntries := btContEntries + 1
+
+    // ----------------------------------------------------------------
+    // EOD exit inside backtest window
+    // ----------------------------------------------------------------
+    if isEODBar and enableEODExit and btPos != 0
+        _ptsEOD = f_calcTradePoints(btPos, btEntryPrice, close)
+        f_recordTrade(_ptsEOD)
+        btEODExits := btEODExits + 1
+        if showBTLabels
+            label.new(bar_index, close, "EOD EXIT@" + f_priceText(close) + "\n" + tostring(_ptsEOD, "#.##"),
+                      style=label.style_label_left, color=color.new(color.yellow, 0), textcolor=color.black, size=size.tiny)
+        btPos        := 0
+        btEntryPrice := na
+        btEntryBar   := na
+
+    // ----------------------------------------------------------------
+    // Normal position management
+    // ----------------------------------------------------------------
+    if btPos == 0
+        if btBuy
+            btPos        := 1
+            btEntryPrice := close
+            btEntryBar   := bar_index
+            if showBTLabels
+                label.new(bar_index, low, (contLong ? "CONT " : "") + "BT BUY@" + f_priceText(close),
+                          style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.tiny)
+        else if btSell
+            btPos        := -1
+            btEntryPrice := close
+            btEntryBar   := bar_index
+            if showBTLabels
+                label.new(bar_index, high, (contShort ? "CONT " : "") + "BT SELL@" + f_priceText(close),
+                          style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
+
+    else if btPos == 1 and btSell
+        _pts = f_calcTradePoints(1, btEntryPrice, close)
+        f_recordTrade(_pts)
+        if showBTLabels
+            label.new(bar_index, high, "BT EXIT L@" + f_priceText(close) + "\n" + tostring(_pts, "#.##"),
+                      style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.black, size=size.tiny)
+        btPos        := -1
+        btEntryPrice := close
+        btEntryBar   := bar_index
+
+    else if btPos == -1 and btBuy
+        _pts = f_calcTradePoints(-1, btEntryPrice, close)
+        f_recordTrade(_pts)
+        if showBTLabels
+            label.new(bar_index, low, "BT EXIT S@" + f_priceText(close) + "\n" + tostring(_pts, "#.##"),
+                      style=label.style_label_up, color=color.new(color.orange, 0), textcolor=color.black, size=size.tiny)
+        btPos        := 1
+        btEntryPrice := close
+        btEntryBar   := bar_index
+
+// Backtest window end: forced exit
+if btWindowEnded and btPos != 0
+    _ptsEnd = f_calcTradePoints(btPos, btEntryPrice, close)
+    f_recordTrade(_ptsEnd)
+    if showBTLabels
+        label.new(bar_index, close, "BT END EXIT@" + f_priceText(close) + "\n" + tostring(_ptsEnd, "#.##"),
+                  style=label.style_label_left, color=color.new(color.yellow, 0), textcolor=color.black, size=size.tiny)
+    btPos        := 0
+    btEntryPrice := na
+    btEntryBar   := na
+
+btOpenPts      = btPos == 0 or na(btEntryPrice) ? 0.0 : f_calcTradePoints(btPos, btEntryPrice, close)
+btWinRate      = btTrades > 0 ? (btWins / btTrades) * 100.0 : 0.0
+btProfitFactor = btGrossLoss > 0 ? btGrossProfit / btGrossLoss : na
+
+// =====================================================================
+// BACKTEST SUMMARY TABLE  (bottom-right)
+// =====================================================================
+var table btTable = table.new(position.bottom_right, 2, 13, border_width=1, border_color=color.gray)
+if barstate.islast and showBTTable
+    table.cell(btTable, 0, 0, "Backtest Summary",   text_color=color.white,  bgcolor=color.black)
+    table.cell(btTable, 1, 0, useDateFilter ? "Selected Range" : "Full Chart", text_color=color.silver, bgcolor=color.black)
+
+    table.cell(btTable, 0, 1,  "Signals",           text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 1,  tostring(btSignals), text_color=color.yellow, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 2,  "Closed Trades",     text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 2,  tostring(btTrades),  text_color=color.yellow, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 3,  "Wins / Loss / Flat",text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 3,  tostring(btWins) + " / " + tostring(btLosses) + " / " + tostring(btFlat), text_color=color.white, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 4,  "Win Rate",          text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 4,  tostring(btWinRate, "#.##") + "%", text_color=btWinRate >= 50 ? color.lime : btWinRate >= 40 ? color.yellow : color.red, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 5,  "Net Points",        text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 5,  tostring(btNetPoints, "#.##"), text_color=btNetPoints >= 0 ? color.lime : color.red, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 6,  "Open Points",       text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 6,  tostring(btOpenPts,  "#.##"), text_color=btOpenPts >= 0 ? color.lime : color.red, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 7,  "Profit Factor",     text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 7,  na(btProfitFactor) ? "NA" : tostring(btProfitFactor, "#.##"), text_color=na(btProfitFactor) ? color.silver : btProfitFactor >= 1.5 ? color.lime : btProfitFactor >= 1 ? color.yellow : color.red, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 8,  "Max Drawdown",      text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 8,  tostring(btMaxDD, "#.##"), text_color=color.orange, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 9,  "Best / Worst",      text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 9,  (na(btBestTrade) ? "NA" : tostring(btBestTrade, "#.##")) + " / " + (na(btWorstTrade) ? "NA" : tostring(btWorstTrade, "#.##")), text_color=color.white, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 10, "EOD Exits",         text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 10, tostring(btEODExits), text_color=color.yellow, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 11, "Cont Re-entries",   text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 11, tostring(btContEntries), text_color=color.teal, bgcolor=color.new(color.black, 0))
+
+    table.cell(btTable, 0, 12, "Open Position",     text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 12, btPos == 1 ? "LONG" : btPos == -1 ? "SHORT" : "FLAT", text_color=btPos == 1 ? color.lime : btPos == -1 ? color.red : color.silver, bgcolor=color.new(color.black, 0))
+
+// =====================================================================
+// FILTER STATUS TABLE  (top-right)
+// =====================================================================
+var table statusTable = table.new(position.top_right, 2, 9, border_width=1, border_color=color.gray)
+if barstate.islast and showFilterTable
+    table.cell(statusTable, 0, 0, "Filter",          text_color=color.white,  bgcolor=color.black)
+    table.cell(statusTable, 1, 0, "Status",          text_color=color.white,  bgcolor=color.black)
+
+    table.cell(statusTable, 0, 1, "Mode",            text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(statusTable, 1, 1, chopMode,          text_color=color.yellow, bgcolor=color.new(color.black, 0))
+
+    table.cell(statusTable, 0, 2, "Stable Bias",     text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(statusTable, 1, 2, stableBias == 1 ? "GREEN" : stableBias == -1 ? "RED" : "NEUTRAL", text_color=stableBias == 1 ? color.lime : stableBias == -1 ? color.red : color.silver, bgcolor=color.new(color.black, 0))
+
+    table.cell(statusTable, 0, 3, "Slope Norm",      text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(statusTable, 1, 3, tostring(hmaSlopeNorm, "#.###") + " / " + tostring(slopeThreshold, "#.###"), text_color=hmaSlopeNorm >= slopeThreshold ? color.lime : color.red, bgcolor=color.new(color.black, 0))
+
+    table.cell(statusTable, 0, 4, "Distance",        text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(statusTable, 1, 4, distOk ? "OK" : "NEAR HMA", text_color=distOk ? color.lime : color.red, bgcolor=color.new(color.black, 0))
+
+    table.cell(statusTable, 0, 5, "Cooldown",        text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(statusTable, 1, 5, cooldownOk ? "OK" : "WAIT", text_color=cooldownOk ? color.lime : color.orange, bgcolor=color.new(color.black, 0))
+
+    table.cell(statusTable, 0, 6, "Chop",            text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(statusTable, 1, 6, isChop ? "YES" : "NO", text_color=isChop ? color.red : color.lime, bgcolor=color.new(color.black, 0))
+
+    table.cell(statusTable, 0, 7, "Last Raw",        text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(statusTable, 1, 7, rawBuy ? "RAW BUY" : rawSell ? "RAW SELL" : "NONE", text_color=rawBuy ? color.lime : rawSell ? color.red : color.silver, bgcolor=color.new(color.black, 0))
+
+    table.cell(statusTable, 0, 8, "ORB",             text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(statusTable, 1, 8, orbFormed ? (tostring(f_round2(orbLow)) + " — " + tostring(f_round2(orbHigh))) : "Forming...", text_color=orbFormed ? color.lime : color.orange, bgcolor=color.new(color.black, 0))
+
+// =====================================================================
+// SESSION STATUS TABLE  (top-left)
+// =====================================================================
+var table sessTable = table.new(position.top_left, 2, 7, border_width=1, border_color=color.gray)
+if barstate.islast and showSessTable
+    table.cell(sessTable, 0, 0, "Session State",     text_color=color.white,  bgcolor=color.black)
+    table.cell(sessTable, 1, 0, syminfo.ticker,      text_color=color.silver, bgcolor=color.black)
+
+    table.cell(sessTable, 0, 1, "Live Position",     text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(sessTable, 1, 1, livePos == 1 ? "LONG" : livePos == -1 ? "SHORT" : "FLAT", text_color=livePos == 1 ? color.lime : livePos == -1 ? color.red : color.silver, bgcolor=color.new(color.black, 0))
+
+    table.cell(sessTable, 0, 2, "Prev Day Signal",   text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(sessTable, 1, 2, prevDaySignal == 1 ? "WAS LONG" : prevDaySignal == -1 ? "WAS SHORT" : "WAS FLAT", text_color=prevDaySignal == 1 ? color.lime : prevDaySignal == -1 ? color.red : color.silver, bgcolor=color.new(color.black, 0))
+
+    table.cell(sessTable, 0, 3, "Gap Today",         text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(sessTable, 1, 3, na(prevDayClose) ? "N/A" : tostring(todayGapPct, "#.##") + "%", text_color=adverseGapToday ? color.red : color.lime, bgcolor=color.new(color.black, 0))
+
+    table.cell(sessTable, 0, 4, "Gap Filter",        text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(sessTable, 1, 4, adverseGapToday ? "BLOCK" : "PASS", text_color=adverseGapToday ? color.red : color.lime, bgcolor=color.new(color.black, 0))
+
+    table.cell(sessTable, 0, 5, "Cont Re-entry",     text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(sessTable, 1, 5, contDoneToday ? "DONE" : inContWindow ? "WINDOW OPEN" : "PENDING", text_color=contDoneToday ? color.silver : inContWindow ? color.lime : color.orange, bgcolor=color.new(color.black, 0))
+
+    table.cell(sessTable, 0, 6, "Late Block",        text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(sessTable, 1, 6, isLateBlock ? "ACTIVE" : "OK", text_color=isLateBlock ? color.orange : color.lime, bgcolor=color.new(color.black, 0))
