@@ -266,8 +266,8 @@ var int   livePos         = 0     // current virtual position: 1=long, -1=short,
 var int   prevDaySignal   = 0     // direction held at previous EOD exit
 var float prevDayClose    = na    // close price at EOD exit for gap calculation
 var bool  contDoneToday   = false // true once a continuation re-entry fires this day
-var bool  adverseGapToday = false // true if today's open has an adverse gap vs prevDaySignal
-var float todayGapPct     = 0.0   // today's open gap % from prevDayClose
+var bool  adverseGapToday = false // true if todays open has an adverse gap vs prevDaySignal
+var float todayGapPct     = 0.0   // todays open gap % from prevDayClose
 
 // =====================================================================
 // DAY-START: reset daily state and compute gap
@@ -289,7 +289,7 @@ if isNewDay
 eodExitFired = false
 if isEODBar and enableEODExit
     prevDaySignal := livePos      // what we were holding
-    prevDayClose  := close        // today's EOD price
+    prevDayClose  := close        // todays EOD price
     livePos       := 0            // go flat overnight
     eodExitFired  := true
 
@@ -306,13 +306,13 @@ sellFinal = sell and not sessionBlockNew and orbSellGateOk
 
 // =====================================================================
 // DAY CONTINUATION RE-ENTRY
-// Fires inside the post-ORB window when the prior day's trend is intact
+// Fires inside the post-ORB window when the prior day trend is intact
 // =====================================================================
 contLong = enableDayCont and
            not contDoneToday and
            inContWindow and
            orbFormed and
-           prevDaySignal == 1 and           // was long at yesterday's EOD
+           prevDaySignal == 1 and           // was long at yesterdays EOD
            not adverseGapToday and          // no adverse overnight gap
            pos == 1 and                     // UT Bot still bullish today
            hmaTrendBull and                 // HMA still rising
@@ -322,7 +322,7 @@ contShort = enableDayCont and
             not contDoneToday and
             inContWindow and
             orbFormed and
-            prevDaySignal == -1 and         // was short at yesterday's EOD
+            prevDaySignal == -1 and         // was short at yesterdays EOD
             not adverseGapToday and
             pos == -1 and                   // UT Bot still bearish today
             hmaTrendBear and                // HMA still falling
