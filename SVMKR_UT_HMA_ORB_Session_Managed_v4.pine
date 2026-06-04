@@ -422,42 +422,35 @@ var float btMaxDD        = 0.0
 var int   btEODExits     = 0
 var int   btContEntries  = 0
 
-f_recordTrade(_pts) =>
-    btTrades     := btTrades + 1
-    btNetPoints  := btNetPoints + _pts
-    btBestTrade  := na(btBestTrade)  ? _pts : max(btBestTrade,  _pts)
-    btWorstTrade := na(btWorstTrade) ? _pts : min(btWorstTrade, _pts)
-    if _pts > 0
-        btWins        := btWins + 1
-        btGrossProfit := btGrossProfit + _pts
-    else if _pts < 0
-        btLosses      := btLosses + 1
-        btGrossLoss   := btGrossLoss + abs(_pts)
-    else
-        btFlat        := btFlat + 1
-    btEquityPeak := max(btEquityPeak, btNetPoints)
-    btMaxDD      := max(btMaxDD, btEquityPeak - btNetPoints)
-
 // Combined effective buy / sell for backtest (intraday + continuation)
 btBuy  = buyFinal or contLong
 btSell = sellFinal or contShort
 
 if inBTWindow
-    // Count signals
     if btBuy or btSell
         btSignals := btSignals + 1
 
-    // Count continuation entries
     if contLong or contShort
         btContEntries := btContEntries + 1
 
-    // ----------------------------------------------------------------
     // EOD exit inside backtest window
-    // ----------------------------------------------------------------
     if isEODBar and enableEODExit and btPos != 0
         _ptsEOD = f_calcTradePoints(btPos, btEntryPrice, close)
-        f_recordTrade(_ptsEOD)
-        btEODExits := btEODExits + 1
+        btTrades     := btTrades + 1
+        btNetPoints  := btNetPoints + _ptsEOD
+        btBestTrade  := na(btBestTrade)  ? _ptsEOD : max(btBestTrade,  _ptsEOD)
+        btWorstTrade := na(btWorstTrade) ? _ptsEOD : min(btWorstTrade, _ptsEOD)
+        if _ptsEOD > 0
+            btWins        := btWins + 1
+            btGrossProfit := btGrossProfit + _ptsEOD
+        else if _ptsEOD < 0
+            btLosses  := btLosses + 1
+            btGrossLoss := btGrossLoss + abs(_ptsEOD)
+        else
+            btFlat := btFlat + 1
+        btEquityPeak := max(btEquityPeak, btNetPoints)
+        btMaxDD      := max(btMaxDD, btEquityPeak - btNetPoints)
+        btEODExits   := btEODExits + 1
         if showBTLabels
             label.new(bar_index, close, "EOD EXIT@" + f_priceText(close) + "\n" + tostring(_ptsEOD, "#.##"),
                       style=label.style_label_left, color=color.new(color.yellow, 0), textcolor=color.black, size=size.tiny)
@@ -465,9 +458,7 @@ if inBTWindow
         btEntryPrice := na
         btEntryBar   := na
 
-    // ----------------------------------------------------------------
-    // Normal position management
-    // ----------------------------------------------------------------
+    // New entry when flat
     if btPos == 0
         if btBuy
             btPos        := 1
@@ -484,9 +475,23 @@ if inBTWindow
                 label.new(bar_index, high, (contShort ? "CONT " : "") + "BT SELL@" + f_priceText(close),
                           style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
 
+    // Exit long on sell signal
     else if btPos == 1 and btSell
         _pts = f_calcTradePoints(1, btEntryPrice, close)
-        f_recordTrade(_pts)
+        btTrades     := btTrades + 1
+        btNetPoints  := btNetPoints + _pts
+        btBestTrade  := na(btBestTrade)  ? _pts : max(btBestTrade,  _pts)
+        btWorstTrade := na(btWorstTrade) ? _pts : min(btWorstTrade, _pts)
+        if _pts > 0
+            btWins        := btWins + 1
+            btGrossProfit := btGrossProfit + _pts
+        else if _pts < 0
+            btLosses    := btLosses + 1
+            btGrossLoss := btGrossLoss + abs(_pts)
+        else
+            btFlat := btFlat + 1
+        btEquityPeak := max(btEquityPeak, btNetPoints)
+        btMaxDD      := max(btMaxDD, btEquityPeak - btNetPoints)
         if showBTLabels
             label.new(bar_index, high, "BT EXIT L@" + f_priceText(close) + "\n" + tostring(_pts, "#.##"),
                       style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.black, size=size.tiny)
@@ -494,9 +499,23 @@ if inBTWindow
         btEntryPrice := close
         btEntryBar   := bar_index
 
+    // Exit short on buy signal
     else if btPos == -1 and btBuy
         _pts = f_calcTradePoints(-1, btEntryPrice, close)
-        f_recordTrade(_pts)
+        btTrades     := btTrades + 1
+        btNetPoints  := btNetPoints + _pts
+        btBestTrade  := na(btBestTrade)  ? _pts : max(btBestTrade,  _pts)
+        btWorstTrade := na(btWorstTrade) ? _pts : min(btWorstTrade, _pts)
+        if _pts > 0
+            btWins        := btWins + 1
+            btGrossProfit := btGrossProfit + _pts
+        else if _pts < 0
+            btLosses    := btLosses + 1
+            btGrossLoss := btGrossLoss + abs(_pts)
+        else
+            btFlat := btFlat + 1
+        btEquityPeak := max(btEquityPeak, btNetPoints)
+        btMaxDD      := max(btMaxDD, btEquityPeak - btNetPoints)
         if showBTLabels
             label.new(bar_index, low, "BT EXIT S@" + f_priceText(close) + "\n" + tostring(_pts, "#.##"),
                       style=label.style_label_up, color=color.new(color.orange, 0), textcolor=color.black, size=size.tiny)
@@ -507,7 +526,20 @@ if inBTWindow
 // Backtest window end: forced exit
 if btWindowEnded and btPos != 0
     _ptsEnd = f_calcTradePoints(btPos, btEntryPrice, close)
-    f_recordTrade(_ptsEnd)
+    btTrades     := btTrades + 1
+    btNetPoints  := btNetPoints + _ptsEnd
+    btBestTrade  := na(btBestTrade)  ? _ptsEnd : max(btBestTrade,  _ptsEnd)
+    btWorstTrade := na(btWorstTrade) ? _ptsEnd : min(btWorstTrade, _ptsEnd)
+    if _ptsEnd > 0
+        btWins        := btWins + 1
+        btGrossProfit := btGrossProfit + _ptsEnd
+    else if _ptsEnd < 0
+        btLosses    := btLosses + 1
+        btGrossLoss := btGrossLoss + abs(_ptsEnd)
+    else
+        btFlat := btFlat + 1
+    btEquityPeak := max(btEquityPeak, btNetPoints)
+    btMaxDD      := max(btMaxDD, btEquityPeak - btNetPoints)
     if showBTLabels
         label.new(bar_index, close, "BT END EXIT@" + f_priceText(close) + "\n" + tostring(_ptsEnd, "#.##"),
                   style=label.style_label_left, color=color.new(color.yellow, 0), textcolor=color.black, size=size.tiny)
