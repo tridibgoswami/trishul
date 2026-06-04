@@ -81,8 +81,8 @@ showSessTable   = input(true,  title="Show Session Status Table",               
 // =====================================================================
 grpBT = "Backtest Window"
 useDateFilter = input(false, title="Use Backtest Start / End Filter", group=grpBT)
-btStart       = input(defval=timestamp(2026, 04, 17, 09, 15), title="Backtest Start Date & Time (IST)", type=input.time, group=grpBT)
-btEnd         = input(defval=timestamp(2026, 04, 17, 15, 30), title="Backtest End Date & Time (IST)",   type=input.time, group=grpBT)
+btStart       = input(1776397500000, title="Backtest Start Date & Time (IST)", type=input.time, group=grpBT)
+btEnd         = input(1776420000000, title="Backtest End Date & Time (IST)",   type=input.time, group=grpBT)
 showBTTable   = input(true,  title="Show Backtest Summary Table",     group=grpBT)
 showBTLabels  = input(false, title="Show Backtest Entry/Exit Labels", group=grpBT)
 
