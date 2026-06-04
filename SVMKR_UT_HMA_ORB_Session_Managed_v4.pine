@@ -73,6 +73,7 @@ enableLateBlock = input(true,  title="Block New Entries After Cutoff Time",     
 lateHour        = input(14,    title="No New Entry After Hour   (24h IST)",       group=grpSess)
 lateMin         = input(30,    title="No New Entry After Minute (IST)",           group=grpSess)
 showContSignals = input(true,  title="Show Day Continuation Signal Labels",        group=grpSess)
+showFlipSignals = input(true,  title="Show Flip/Reversal Signal Labels",          group=grpSess)
 showEODLabel    = input(true,  title="Show EOD Exit Label",                       group=grpSess)
 showSessTable   = input(true,  title="Show Session Status Table",                 group=grpSess)
 
@@ -289,10 +290,21 @@ if isEODBar and enableEODExit
 // =====================================================================
 // SESSION GATES ON INTRADAY SIGNALS
 // =====================================================================
-sessionBlockNew = isLateBlock or isEODTime
+// Block new entries during ORB formation, late session, and EOD
+sessionBlockNew = isLateBlock or isEODTime or inORBPeriod
+
+// ORB gate applies only when flat (livePos == 0); reversals from inside a position bypass it
+orbBuyGateOk  = livePos != 0 or not useORBGate or not orbFormed or close > orbHigh
+orbSellGateOk = livePos != 0 or not useORBGate or not orbFormed or close < orbLow
 
 buyFinal  = buy  and not sessionBlockNew and orbBuyGateOk
 sellFinal = sell and not sessionBlockNew and orbSellGateOk
+
+// Flip signals: raw UT Bot reversal while already in the opposite position.
+// These bypass the HMA chop filter (which lags on reversals) and the ORB gate.
+// Only requirement: ORB must have formed + session must be active.
+flipBuyFinal  = livePos == -1 and rawBuy  and orbFormed and not sessionBlockNew
+flipSellFinal = livePos ==  1 and rawSell and orbFormed and not sessionBlockNew
 
 // =====================================================================
 // DAY CONTINUATION RE-ENTRY
@@ -311,9 +323,9 @@ if contLong or contShort
 // =====================================================================
 // UPDATE LIVE POSITION TRACKER
 // =====================================================================
-if buyFinal or contLong
+if buyFinal or contLong or flipBuyFinal
     livePos := 1
-if sellFinal or contShort
+if sellFinal or contShort or flipSellFinal
     livePos := -1
 
 // =====================================================================
@@ -341,6 +353,12 @@ plotshape(showContSignals and contLong,  title="Cont Long",  text=">CONT L", sty
 plotshape(showContSignals and contShort, title="Cont Short", text=">CONT S", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 0), textcolor=color.white, size=size.small)
 
 // =====================================================================
+// SHAPES - FLIP / REVERSAL SIGNALS
+// =====================================================================
+plotshape(showFlipSignals and flipBuyFinal,  title="Flip Buy",  text="FLIP B", style=shape.labelup,   location=location.belowbar, color=color.new(color.fuchsia, 0), textcolor=color.white, size=size.small)
+plotshape(showFlipSignals and flipSellFinal, title="Flip Sell", text="FLIP S", style=shape.labeldown, location=location.abovebar, color=color.new(color.fuchsia, 0), textcolor=color.white, size=size.small)
+
+// =====================================================================
 // SHAPES - EOD EXIT MARKER
 // =====================================================================
 plotshape(showEODLabel and eodExitFired, title="EOD Exit", text="EOD FLAT", style=shape.xcross, location=location.abovebar, color=color.new(color.yellow, 0), textcolor=color.black, size=size.small)
@@ -364,6 +382,8 @@ alertcondition(buyFinal,     "UT Long (Session OK)",  "UT Long - Session Filtere
 alertcondition(sellFinal,    "UT Short (Session OK)", "UT Short - Session Filtered")
 alertcondition(contLong,     "Day Cont LONG",         "Day Continuation LONG re-entry")
 alertcondition(contShort,    "Day Cont SHORT",        "Day Continuation SHORT re-entry")
+alertcondition(flipBuyFinal, "Flip BUY Reversal",     "Flip - UT reversal to LONG (bypasses chop filter)")
+alertcondition(flipSellFinal,"Flip SELL Reversal",    "Flip - UT reversal to SHORT (bypasses chop filter)")
 alertcondition(eodExitFired, "EOD Force Exit",        "EOD Force-Flat Exit fired")
 alertcondition(blockedBuy,   "Blocked UT Long",       "Blocked UT Long - Chop Filter")
 alertcondition(blockedSell,  "Blocked UT Short",      "Blocked UT Short - Chop Filter")
@@ -391,15 +411,18 @@ var float btEquityPeak  = 0.0
 var float btMaxDD       = 0.0
 var int   btEODExits    = 0
 var int   btContEntries = 0
+var int   btFlipEntries = 0
 
-btBuy  = buyFinal or contLong
-btSell = sellFinal or contShort
+btBuy  = buyFinal or contLong or flipBuyFinal
+btSell = sellFinal or contShort or flipSellFinal
 
 if inBTWindow
     if btBuy or btSell
         btSignals := btSignals + 1
     if contLong or contShort
         btContEntries := btContEntries + 1
+    if flipBuyFinal or flipSellFinal
+        btFlipEntries := btFlipEntries + 1
 
     // EOD exit
     if isEODBar and enableEODExit and btPos != 0
@@ -433,13 +456,13 @@ if inBTWindow
             btEntryPrice := close
             btEntryBar   := bar_index
             if showBTLabels
-                label.new(bar_index, low, (contLong ? "CONT " : "") + "BT BUY@" + f_priceText(close), style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.tiny)
+                label.new(bar_index, low, (contLong ? "CONT " : flipBuyFinal ? "FLIP " : "") + "BT BUY@" + f_priceText(close), style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.tiny)
         else if btSell
             btPos        := -1
             btEntryPrice := close
             btEntryBar   := bar_index
             if showBTLabels
-                label.new(bar_index, high, (contShort ? "CONT " : "") + "BT SELL@" + f_priceText(close), style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
+                label.new(bar_index, high, (contShort ? "CONT " : flipSellFinal ? "FLIP " : "") + "BT SELL@" + f_priceText(close), style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny)
         bar_index
 
     // Exit long on sell
@@ -518,7 +541,7 @@ btProfitFactor = btGrossLoss > 0 ? btGrossProfit / btGrossLoss : na
 // =====================================================================
 // BACKTEST SUMMARY TABLE  (bottom-right)
 // =====================================================================
-var table btTable = table.new(position.bottom_right, 2, 13, border_width=1, border_color=color.gray)
+var table btTable = table.new(position.bottom_right, 2, 14, border_width=1, border_color=color.gray)
 if barstate.islast and showBTTable
     table.cell(btTable, 0, 0,  "Backtest Summary",   text_color=color.white,  bgcolor=color.black)
     table.cell(btTable, 1, 0,  useDateFilter ? "Selected Range" : "Full Chart", text_color=color.silver, bgcolor=color.black)
@@ -544,8 +567,10 @@ if barstate.islast and showBTTable
     table.cell(btTable, 1, 10, tostring(btEODExits),  text_color=color.yellow, bgcolor=color.new(color.black, 0))
     table.cell(btTable, 0, 11, "Cont Re-entries",    text_color=color.silver, bgcolor=color.new(color.navy, 20))
     table.cell(btTable, 1, 11, tostring(btContEntries), text_color=color.teal, bgcolor=color.new(color.black, 0))
-    table.cell(btTable, 0, 12, "Open Position",      text_color=color.silver, bgcolor=color.new(color.navy, 20))
-    table.cell(btTable, 1, 12, btPos == 1 ? "LONG" : btPos == -1 ? "SHORT" : "FLAT", text_color=btPos == 1 ? color.lime : btPos == -1 ? color.red : color.silver, bgcolor=color.new(color.black, 0))
+    table.cell(btTable, 0, 12, "Flip Re-entries",    text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 12, tostring(btFlipEntries), text_color=color.fuchsia, bgcolor=color.new(color.black, 0))
+    table.cell(btTable, 0, 13, "Open Position",      text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(btTable, 1, 13, btPos == 1 ? "LONG" : btPos == -1 ? "SHORT" : "FLAT", text_color=btPos == 1 ? color.lime : btPos == -1 ? color.red : color.silver, bgcolor=color.new(color.black, 0))
 
 // =====================================================================
 // FILTER STATUS TABLE  (top-right)
