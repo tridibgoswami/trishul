@@ -245,7 +245,7 @@ var float orbHigh = na
 var float orbLow  = na
 
 if isNewDay
-    // First bar of the trading day (09:15) — also the first ORB bar
+    // First bar of the trading day (09:15) - also the first ORB bar
     orbHigh := high
     orbLow  := low
 else if inORBPeriod
@@ -344,37 +344,37 @@ if sellFinal or contShort
     livePos := -1
 
 // =====================================================================
-// PLOTS — HMA, UT TRAILING STOP
+// PLOTS - HMA, UT TRAILING STOP
 // =====================================================================
 plot(hma,               color=hmaColor, linewidth=2, title="HullMA Stable Bias")
 plot(xATRTrailingStop,  color=xcolor,   linewidth=1, title="UT ATR Trailing Stop")
 
 // =====================================================================
-// PLOTS — ORB LEVELS
+// PLOTS - ORB LEVELS
 // =====================================================================
 // Draw levels only after ORB is formed and keep them for the rest of the day
 plot(showORBLines and orbFormed ? orbHigh : na, style=plot.style_line, color=color.new(color.lime,  20), linewidth=1, title="ORB High")
 plot(showORBLines and orbFormed ? orbLow  : na, style=plot.style_line, color=color.new(color.red,   20), linewidth=1, title="ORB Low")
 
 // =====================================================================
-// SHAPES — INTRADAY BUY / SELL
+// SHAPES - INTRADAY BUY / SELL
 // =====================================================================
 plotshape(buyFinal,  title="Buy",  text="Buy",  style=shape.labelup,   location=location.belowbar, color=color.green, textcolor=color.white, size=size.tiny)
 plotshape(sellFinal, title="Sell", text="Sell", style=shape.labeldown, location=location.abovebar, color=color.red,   textcolor=color.white, size=size.tiny)
 
 // =====================================================================
-// SHAPES — DAY CONTINUATION SIGNALS
+// SHAPES - DAY CONTINUATION SIGNALS
 // =====================================================================
-plotshape(showContSignals and contLong,  title="Cont Long",  text="▶CONT L", style=shape.labelup,   location=location.belowbar, color=color.new(color.teal,   0), textcolor=color.white, size=size.small)
-plotshape(showContSignals and contShort, title="Cont Short", text="▶CONT S", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 0), textcolor=color.white, size=size.small)
+plotshape(showContSignals and contLong,  title="Cont Long",  text=">CONT L", style=shape.labelup,   location=location.belowbar, color=color.new(color.teal,   0), textcolor=color.white, size=size.small)
+plotshape(showContSignals and contShort, title="Cont Short", text=">CONT S", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 0), textcolor=color.white, size=size.small)
 
 // =====================================================================
-// SHAPES — EOD EXIT MARKER
+// SHAPES - EOD EXIT MARKER
 // =====================================================================
 plotshape(showEODLabel and eodExitFired, title="EOD Exit", text="EOD FLAT", style=shape.xcross, location=location.abovebar, color=color.new(color.yellow, 0), textcolor=color.black, size=size.small)
 
 // =====================================================================
-// SHAPES — BLOCKED SIGNALS (chop filter)
+// SHAPES - BLOCKED SIGNALS (chop filter)
 // =====================================================================
 plotshape(showBlockedSignals and blockedBuy,  title="Blocked Buy",  text="B-Buy",  style=shape.triangleup,   location=location.belowbar, color=color.gray, textcolor=color.white, size=size.tiny)
 plotshape(showBlockedSignals and blockedSell, title="Blocked Sell", text="B-Sell", style=shape.triangledown, location=location.abovebar, color=color.gray, textcolor=color.white, size=size.tiny)
@@ -388,13 +388,13 @@ bgcolor(isLateBlock and not isEODTime ? color.new(color.orange, 95) : na, title=
 // =====================================================================
 // ALERT CONDITIONS
 // =====================================================================
-alertcondition(buyFinal,   "UT Long (Session OK)",     "UT Long — Session Filtered")
-alertcondition(sellFinal,  "UT Short (Session OK)",    "UT Short — Session Filtered")
+alertcondition(buyFinal,   "UT Long (Session OK)",     "UT Long - Session Filtered")
+alertcondition(sellFinal,  "UT Short (Session OK)",    "UT Short - Session Filtered")
 alertcondition(contLong,   "Day Cont LONG",            "Day Continuation LONG re-entry")
 alertcondition(contShort,  "Day Cont SHORT",           "Day Continuation SHORT re-entry")
 alertcondition(eodExitFired, "EOD Force Exit",         "EOD Force-Flat Exit fired")
-alertcondition(blockedBuy,  "Blocked UT Long",         "Blocked UT Long — Chop Filter")
-alertcondition(blockedSell, "Blocked UT Short",        "Blocked UT Short — Chop Filter")
+alertcondition(blockedBuy,  "Blocked UT Long",         "Blocked UT Long - Chop Filter")
+alertcondition(blockedSell, "Blocked UT Short",        "Blocked UT Short - Chop Filter")
 
 // =====================================================================
 // BACKTEST ENGINE
@@ -625,7 +625,7 @@ if barstate.islast and showFilterTable
     table.cell(statusTable, 1, 7, rawBuy ? "RAW BUY" : rawSell ? "RAW SELL" : "NONE", text_color=rawBuy ? color.lime : rawSell ? color.red : color.silver, bgcolor=color.new(color.black, 0))
 
     table.cell(statusTable, 0, 8, "ORB",             text_color=color.silver, bgcolor=color.new(color.navy, 20))
-    table.cell(statusTable, 1, 8, orbFormed ? (tostring(f_round2(orbLow)) + " — " + tostring(f_round2(orbHigh))) : "Forming...", text_color=orbFormed ? color.lime : color.orange, bgcolor=color.new(color.black, 0))
+    table.cell(statusTable, 1, 8, orbFormed ? (tostring(f_round2(orbLow)) + " - " + tostring(f_round2(orbHigh))) : "Forming...", text_color=orbFormed ? color.lime : color.orange, bgcolor=color.new(color.black, 0))
 
 // =====================================================================
 // SESSION STATUS TABLE  (top-left)
