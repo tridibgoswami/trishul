@@ -88,6 +88,17 @@ showBTTable   = input(true,  title="Show Backtest Summary Table",     group=grpB
 showBTLabels  = input(false, title="Show Backtest Entry/Exit Labels", group=grpBT)
 
 // =====================================================================
+// GAP DAY ADAPTATION SETTINGS
+// =====================================================================
+grpGap = "Gap Day Adaptation (ATR + ORB)"
+enableGapAdapt     = input(true,  title="Enable Gap-Day Adaptation (A+B)",                    group=grpGap)
+largeGapThreshPct  = input(0.5,   title="Large Gap Threshold %",           minval=0.1, step=0.1, group=grpGap)
+enableGapAtrFix    = input(true,  title="(A) Use Prev-Day ATR to Neutralize Gap Inflation",   group=grpGap)
+gapAtrWarmupBars   = input(5,     title="(A) Bars to Apply ATR Override After Gap Open",      minval=1, maxval=20, group=grpGap)
+enableGapORBExtend = input(true,  title="(B) Auto-Extend ORB Window on Large Gap Day",        group=grpGap)
+gapExtraORBMins    = input(10,    title="(B) Extra ORB Minutes on Large Gap Day",             minval=5, step=5, group=grpGap)
+
+// =====================================================================
 // HELPER FUNCTIONS
 // =====================================================================
 f_modeSlopeThreshold(_mode, _manual, _auto) =>
@@ -109,19 +120,49 @@ f_calcTradePoints(_fromPos, _entryPx, _exitPx) =>
     _fromPos == 1 ? (_exitPx - _entryPx) : (_entryPx - _exitPx)
 
 // =====================================================================
+// GAP DAY DETECTION  (must run before UT Bot so nLossEffective is ready)
+// _gapPrevClose and _gapPrevATR are snapshotted at EOD each day and
+// used the following morning to detect large gaps and correct ATR inflation.
+// =====================================================================
+var float _gapPrevClose  = na
+var float _gapPrevATR    = na
+var bool  isLargeGapDay  = false
+var int   barsIntoDay    = 0
+
+_gapNewDay = change(time("D")) != 0
+if _gapNewDay
+    barsIntoDay := 1
+    if enableGapAdapt and not na(_gapPrevClose)
+        _gapAbsPct    = abs((open - _gapPrevClose) / _gapPrevClose * 100.0)
+        isLargeGapDay := _gapAbsPct >= largeGapThreshPct
+    else
+        isLargeGapDay := false
+    barsIntoDay    // integer return so outer if/else branches share the same type
+else
+    barsIntoDay := barsIntoDay + 1
+
+// =====================================================================
 // UT BOT LOGIC
 // =====================================================================
 xATR  = atr(c)
 nLoss = a * xATR
 
+// Option A: on large gap days use yesterday's ATR for the first N bars to
+// prevent the gap candle's inflated true-range from pushing the trailing
+// stop unreasonably far from price and delaying crossover signals.
+nLossEffective = enableGapAdapt and enableGapAtrFix and isLargeGapDay and
+                 not na(_gapPrevATR) and barsIntoDay <= gapAtrWarmupBars
+                 ? a * _gapPrevATR
+                 : nLoss
+
 src = h ? security(heikinashi(syminfo.tickerid), timeframe.period, close, lookahead=false) : close
 
 xATRTrailingStop = 0.0
 xATRTrailingStop := iff(src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0),
-     max(nz(xATRTrailingStop[1]), src - nLoss),
+     max(nz(xATRTrailingStop[1]), src - nLossEffective),
    iff(src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0),
-     min(nz(xATRTrailingStop[1]), src + nLoss),
-   iff(src > nz(xATRTrailingStop[1], 0), src - nLoss, src + nLoss)))
+     min(nz(xATRTrailingStop[1]), src + nLossEffective),
+   iff(src > nz(xATRTrailingStop[1], 0), src - nLossEffective, src + nLossEffective)))
 
 pos = 0
 pos := iff(src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0),  1,
@@ -221,7 +262,11 @@ hmaColor = stableBias == 1 ? color.green : stableBias == -1 ? color.red : color.
 // SESSION & TIME UTILITIES
 // =====================================================================
 orbMins          = orbDurInput == "5 min" ? 5 : orbDurInput == "10 min" ? 10 : 15
-orbEndMinute     = 15 + orbMins
+// Option B: extend ORB on large gap days to allow HMA / ATR more time to stabilize
+effectiveORBMins = enableGapAdapt and enableGapORBExtend and isLargeGapDay
+                   ? orbMins + gapExtraORBMins
+                   : orbMins
+orbEndMinute     = 15 + effectiveORBMins
 
 barTimeMin       = hour * 60 + minute
 eodTimeMin       = eodHour * 60 + eodMin
@@ -286,6 +331,9 @@ if isEODBar and enableEODExit
     prevDayClose  := close
     livePos       := 0
     eodExitFired  := true
+    // Snapshot for gap-day adaptation (Option A)
+    _gapPrevClose := close
+    _gapPrevATR   := xATR
 
 // =====================================================================
 // SESSION GATES ON INTRADAY SIGNALS
@@ -372,8 +420,9 @@ plotshape(showBlockedSignals and blockedSell, title="Blocked Sell", text="B-Sell
 // =====================================================================
 // BACKGROUNDS
 // =====================================================================
-bgcolor(showChopBg and isChop         ? color.new(color.gray,   90) : na, title="Chop Background")
-bgcolor(isLateBlock and not isEODTime ? color.new(color.orange, 95) : na, title="Late Block Zone")
+bgcolor(showChopBg and isChop                     ? color.new(color.gray,   90) : na, title="Chop Background")
+bgcolor(isLateBlock and not isEODTime             ? color.new(color.orange, 95) : na, title="Late Block Zone")
+bgcolor(enableGapAdapt and isLargeGapDay          ? color.new(color.purple, 93) : na, title="Large Gap Day Zone")
 
 // =====================================================================
 // ALERT CONDITIONS
@@ -599,7 +648,7 @@ if barstate.islast and showFilterTable
 // =====================================================================
 // SESSION STATUS TABLE  (top-left)
 // =====================================================================
-var table sessTable = table.new(position.top_left, 2, 7, border_width=1, border_color=color.gray)
+var table sessTable = table.new(position.top_left, 2, 8, border_width=1, border_color=color.gray)
 if barstate.islast and showSessTable
     table.cell(sessTable, 0, 0, "Session State",   text_color=color.white,  bgcolor=color.black)
     table.cell(sessTable, 1, 0, syminfo.ticker,    text_color=color.silver, bgcolor=color.black)
@@ -615,3 +664,5 @@ if barstate.islast and showSessTable
     table.cell(sessTable, 1, 5, contDoneToday ? "DONE" : inContWindow ? "WINDOW OPEN" : "PENDING", text_color=contDoneToday ? color.silver : inContWindow ? color.lime : color.orange, bgcolor=color.new(color.black, 0))
     table.cell(sessTable, 0, 6, "Late Block",      text_color=color.silver, bgcolor=color.new(color.navy, 20))
     table.cell(sessTable, 1, 6, isLateBlock ? "ACTIVE" : "OK", text_color=isLateBlock ? color.orange : color.lime, bgcolor=color.new(color.black, 0))
+    table.cell(sessTable, 0, 7, "Gap Day Adapt",   text_color=color.silver, bgcolor=color.new(color.navy, 20))
+    table.cell(sessTable, 1, 7, not enableGapAdapt ? "OFF" : isLargeGapDay ? (barsIntoDay <= gapAtrWarmupBars ? "ATR+ORB" : "ORB") : "NORMAL", text_color=not enableGapAdapt ? color.silver : isLargeGapDay ? color.fuchsia : color.lime, bgcolor=color.new(color.black, 0))
