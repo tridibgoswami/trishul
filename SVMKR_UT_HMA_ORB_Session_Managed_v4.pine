@@ -308,24 +308,26 @@ sellFinal = sell and not sessionBlockNew and orbSellGateOk
 // DAY CONTINUATION RE-ENTRY
 // Fires inside the post-ORB window when the prior day trend is intact
 // =====================================================================
+// contLong: prev day was long, no adverse gap, UT Bot + HMA still bullish, ORB broken up
 contLong = enableDayCont and
            not contDoneToday and
            inContWindow and
            orbFormed and
-           prevDaySignal == 1 and           // was long at yesterdays EOD
-           not adverseGapToday and          // no adverse overnight gap
-           pos == 1 and                     // UT Bot still bullish today
-           hmaTrendBull and                 // HMA still rising
-           (not useORBGate or close > orbHigh)  // ORB break confirms direction
+           prevDaySignal == 1 and
+           not adverseGapToday and
+           pos == 1 and
+           hmaTrendBull and
+           (not useORBGate or close > orbHigh)
 
+// contShort: prev day was short, no adverse gap, UT Bot + HMA still bearish, ORB broken down
 contShort = enableDayCont and
             not contDoneToday and
             inContWindow and
             orbFormed and
-            prevDaySignal == -1 and         // was short at yesterdays EOD
+            prevDaySignal == -1 and
             not adverseGapToday and
-            pos == -1 and                   // UT Bot still bearish today
-            hmaTrendBear and                // HMA still falling
+            pos == -1 and
+            hmaTrendBear and
             (not useORBGate or close < orbLow)
 
 if contLong or contShort
