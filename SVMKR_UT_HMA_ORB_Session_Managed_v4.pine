@@ -296,8 +296,7 @@ else if inORBPeriod
 
 orbFormed = not na(orbHigh) and barTimeMin >= orbEndTimeMin
 
-orbBuyGateOk  = not useORBGate or not orbFormed or close > orbHigh
-orbSellGateOk = not useORBGate or not orbFormed or close < orbLow
+// orbBuyGateOk / orbSellGateOk defined below in SESSION GATES after livePos is known
 
 // =====================================================================
 // SESSION MANAGEMENT VARIABLES
